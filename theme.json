@@ -5,8 +5,6 @@
   "name": "Animated folders",
   "description": "Animated folder icons.",
   "version": "1.2",
-  "createdAt": "2025-05-31",
-  "updatedAt": "2025-05-31",
   "style": {
     "chrome": "https://raw.githubusercontent.com/JustAdumbPrsn/zen-folders-rwx-/refs/heads/main/userChrome.css"
   },
@@ -17,5 +15,5 @@
     "chrome",
     "minimal"
   ],
-  "js": "https://raw.githubusercontent.com/JustADumbPrsn/zen-folders-rwx-/main/JS/folder.uc.js"
+  "js": "https://raw.githubusercontent.com/octaviusz/zen-groups/main/groups.uc.js"
 }
