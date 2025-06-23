@@ -1,19 +1,21 @@
 {
-  "id": "Animated folders",
-  "homepage": "https://github.com/JustAdumbPrsn/zen-folders-rwx-",
-  "author": "RWX",
-  "name": "Animated folders",
-  "description": "Animated folder icons.",
-  "version": "1.2",
-  "style": {
-    "chrome": "https://raw.githubusercontent.com/JustAdumbPrsn/zen-folders-rwx-/refs/heads/main/userChrome.css"
-  },
-  "preferences": "https://raw.githubusercontent.com/JustADumbPrsn/zen-folders-rwx-/main/preferences.json",
-  "readme": "https://raw.githubusercontent.com/JustADumbPrsn/zen-folders-rwx-/main/README.md",
+  "id": "zen-groups",
+  "name": "Zen Groups",
+  "description": "Groups like Arc Folders (almost)",
+  "homepage": "https://github.com/octaviusz/zen-groups",
+  "readme": "https://raw.githubusercontent.com/octaviusz/zen-groups/refs/heads/main/README.md",
+  "image": "",
+  "js": "https://raw.githubusercontent.com/octaviusz/zen-groups/refs/heads/main/groups.uc.js",
+  "preferences": "https://raw.githubusercontent.com/octaviusz/zen-groups/refs/heads/main/preferences.json",
+  "author": "octaviusz",
+  "version": "0.0.4",
   "tags": [
-    "content",
-    "chrome",
-    "minimal"
+    "sine",
+    "fx-autoconfig",
+    "Groups",
+    "Zen Groups"
   ],
-  "js": "https://raw.githubusercontent.com/octaviusz/zen-groups/main/groups.uc.js"
+  "createdAt": "2025-06-15",
+  "updatedAt": "2025-06-21",
+  "fork": ["zen"]
 }
