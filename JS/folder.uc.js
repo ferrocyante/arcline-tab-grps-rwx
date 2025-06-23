@@ -7,15 +7,20 @@
 // ==/UserScript==
 // (Note: The above header is for userscript managers, may not be needed for autoconfig)
 
-
 class ZenGroups {
   #initialized = false;
   #animationState = null;
-  #mouseTimer = null;
   #activeGroup = null;
   #iconsPrefName = "mod.zen-groups.icon.emoji";
+  tabsListPopup = window.MozXULElement.parseXULToFragment(`
+    <panel id="zen-group-tabs-popup" type="arrow" orient="vertical">
+      <scrollbox class="tabs-list-scrollbox" flex="1">
+        <vbox id="zen-group-tabs-list" class="panel-list"></vbox>
+      </scrollbox>
+    </panel>
+  `);
   menuPopup = window.MozXULElement.parseXULToFragment(`
-    <menupopup id="tab-group-button-popup">
+    <menupopup id="tab-group-actions-popup">
     <menuitem id="zenGroupsRenameGroup" label="Rename" tooltiptext="Rename Group" command="cmd_zenGroupsRenameGroup"/>
       <menuitem id="zenGroupsChangeIcon" label="Change Icon" tooltiptext="Change Icon" command="cmd_zenGroupsChangeIcon"/>
       <menuitem id="zenGroupsUngroupGroup" label="Ungroup" tooltiptext="Ungroup Group" command="cmd_zenGroupsUngroupGroup"/>
@@ -24,7 +29,7 @@ class ZenGroups {
   `);
   folderSVG = new DOMParser().parseFromString(
     `
-    <svg width="40px" height="40px" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" viewBox="-67.409 -14.145 29.279 28.92">
+    <svg width="100%" height="100%" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" viewBox="-67.409 -14.145 29.279 28.92">
       <defs>
         <linearGradient gradientUnits="userSpaceOnUse" x1="-53.05" y1="-3.8" x2="-53.05" y2="8.998" id="gradient-1">
           <stop offset="0" style="stop-color: rgb(255, 255, 255);"/>
@@ -58,6 +63,7 @@ class ZenGroups {
         <animateTransform begin="0s" type="translate" additive="sum" attributeName="transform" values="0 0;-1 0" dur="0.3s" fill="freeze" keyTimes="0; 1" calcMode="spline" keySplines="0.42 0 0.58 1"/>
         <animateTransform begin="0s" type="scale" additive="sum" attributeName="transform" values="1 1;0.9 0.9" dur="0.3s" fill="freeze" keyTimes="0; 1" calcMode="spline" keySplines="0.42 0 0.58 1"/>
         </text>
+    <!--End Emoji (text)-->
       <rect x="-61.3" y="-3.8" width="16.5" height="12.798" style="stroke-width: 1.25; fill-opacity: 0.15; transform-origin: -53.05px 2.599px; fill: url(&quot;#gradient-1&quot;);" id="rect-1" rx="2.25">
         <animateTransform begin="0s" type="skewX" additive="sum" attributeName="transform" values="0;-17" dur="0.3s" fill="freeze" keyTimes="0; 1" calcMode="spline" keySplines="0.42 0 0.58 1"/>
         <animateTransform begin="0s" type="translate" additive="sum" attributeName="transform" values="0 0;3 -0.5" dur="0.3s" fill="freeze" keyTimes="0; 1" calcMode="spline" keySplines="0.42 0 0.58 1"/>
@@ -67,11 +73,65 @@ class ZenGroups {
     `,
     "image/svg+xml",
   ).documentElement;
+  constructor() {
+    this.#patchUnload();
+    this.#patchGroup();
+  }
+
+  #patchUnload() {
+    const origUnload = gBrowser.explicitUnloadTabs.bind(gBrowser);
+
+    gBrowser.explicitUnloadTabs = (tabs) => {
+      origUnload(tabs);
+
+      for (const tab of tabs) {
+        const group = tab.group;
+
+        if (!group) continue;
+
+        this._hideTab(tab);
+
+        this._watchTabState(tab, () => {
+          if (!this._hasActiveTabs(group) && group.hasAttribute("has-active")) {
+            group.removeAttribute("has-active");
+            group.removeAttribute("was-collapsed");
+            group.collapsed = true;
+          }
+        });
+      }
+    };
+  }
+
+  #patchGroup() {
+    customElements.whenDefined("tab-group").then(() => {
+      const ctor = customElements.get("tab-group");
+      if (!ctor) return;
+
+      ctor.markup = `
+        <hbox class="tab-group-label-container" pack="center">
+          <html:div class="tab-group-icon"/>
+          <label class="tab-group-label" role="button"/>
+          <toolbarbutton class="toolbarbutton-1 tab-group-tabs-button" tooltiptext="Group tabs button"/>
+          <toolbarbutton class="toolbarbutton-1 tab-group-action-button" tooltiptext="Group action button"/>
+        <html:slot/>
+        </hbox>
+        <html:div class="tab-group-container">
+          <html:div class="tab-group-start" />
+        </html:div>
+      `;
+    });
+  }
+
   init() {
     if (this.#initialized) return;
     this.#initialized = true;
     this.handlers = new WeakMap();
     this.#initHandlers();
+
+    this.styleNode = document.createXULElement("style");
+    this.styleNode.textContent = this.css;
+    document.documentElement.appendChild(this.styleNode);
+    this.#createGroupTabsPopup();
 
     for (const group of this._groups()) {
       this.#setupGroup(group);
@@ -97,11 +157,25 @@ class ZenGroups {
       "TabGroupCollapse",
       this.#onTabGroupCollapse.bind(this),
     );
-
     gBrowser.tabContainer.addEventListener(
-      "TabSelect",
-      this.#handleGlobalTabSelect.bind(this),
+      "click",
+      this.#onTabResetButtonClick.bind(this),
+      true,
     );
+  }
+
+  _watchTabState(tab, callback, attributeList = ["pending"]) {
+    if (!tab || !callback) return;
+
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      callback(tab);
+    });
+
+    observer.observe(tab, {
+      attributes: true,
+      attributeFilter: attributeList,
+    });
   }
 
   _groups() {
@@ -131,26 +205,25 @@ class ZenGroups {
     );
   }
   _updateTabVisibility(group) {
-    const isHoverOpened = group.hasAttribute("has-focus");
-    // const hasSelection = this._hasActiveTabs(group);
+    const hasActive = group.hasAttribute("has-active");
 
     this._resetTabsStyle(group);
 
     for (const tab of group.tabs) {
-      let shouldBeHidden = false;
-      tab.style.setProperty("display", "flex ", "important");
+      const resetButton = tab.querySelector(".tab-reset-button");
+      if (resetButton) {
+        resetButton.style.removeProperty("display");
+      }
 
-      if (isHoverOpened) {
-        // if (hasSelection) {
-        //   shouldBeHidden = !tab.selected;
-        // } else {
-        //   shouldBeHidden = tab.hasAttribute("pending");
-        // }
+      let shouldBeHidden = false;
+      if (hasActive) {
         shouldBeHidden = tab.hasAttribute("pending");
       }
 
       if (shouldBeHidden) {
         this._hideTab(tab);
+      } else if (hasActive && resetButton) {
+        resetButton.style.display = "block";
       }
     }
   }
@@ -159,7 +232,6 @@ class ZenGroups {
     const wasCollapsed = group.hasAttribute("was-collapsed");
 
     group.removeAttribute("was-collapsed");
-    group.removeAttribute("has-focus");
 
     if (wasCollapsed) {
       group.collapsed = true;
@@ -218,18 +290,13 @@ class ZenGroups {
   #setupGroup(group) {
     if (this.handlers.has(group)) return;
 
-    this.#createFolderIcon(group);
-    this.#createGroupButton(group);
+    this.#setupFolderIcon(group);
+    this.#setupGroupButton(group);
 
     const groupHandlers = {
-      handleMouseEnter: this.#handleMouseEnter.bind(this),
-      handleMouseLeave: this.#handleMouseLeave.bind(this),
       handleClick: this.#handleClick.bind(this),
     };
     this.handlers.set(group, groupHandlers);
-
-    group.addEventListener("mouseenter", groupHandlers.handleMouseEnter);
-    group.addEventListener("mouseleave", groupHandlers.handleMouseLeave);
 
     const labelContainer = group.querySelector(".tab-group-label-container");
     labelContainer.addEventListener("click", groupHandlers.handleClick);
@@ -241,11 +308,29 @@ class ZenGroups {
 
   #onTabUngrouped(event) {
     const tab = event.target;
+    const group = event.detail;
+
+    console.log(tab, group);
     tab.style.removeProperty("display");
+    tab.querySelector(".tab-reset-button").style.removeProperty("display");
+
+    if (!this._hasActiveTabs(group) && group.hasAttribute("has-active")) {
+      group.removeAttribute("has-active");
+      group.removeAttribute("was-collapsed");
+      group.collapsed = true;
+    }
   }
 
   #onTabGrouped(event) {
-    // TODO: WRITE ME PLZ
+    const tab = event.target;
+    const group = tab.group;
+    if (tab.selected && group.collapsed && !group.hasAttribute("has-active")) {
+      group.toggleAttribute("has-active");
+      group.toggleAttribute("was-collapsed");
+      this.#animationState = "close";
+      group.collapsed = false;
+    }
+    this._updateTabVisibility(group);
   }
 
   #onTabGroupRemoved(event) {
@@ -271,30 +356,6 @@ class ZenGroups {
     this.#animationState = null;
   }
 
-  #handleMouseEnter(event) {
-    const group = event.target;
-
-    if (group.collapsed && this._hasActiveTabs(group)) {
-      this.#mouseTimer = setTimeout(() => {
-        group.setAttribute("has-focus", "");
-        group.setAttribute("was-collapsed", "");
-        this._updateTabVisibility(group);
-        group.collapsed = false;
-      }, 300);
-    }
-  }
-
-  #handleMouseLeave(event) {
-    const group = event.target;
-
-    clearTimeout(this.#mouseTimer);
-    if (this._hasSelectedTabs(group)) {
-      this._updateTabVisibility(group);
-    } else {
-      this._resetGroupState(group);
-    }
-  }
-
   #handleClick(event) {
     if (event.button !== 0) return;
     const group = event.currentTarget.parentElement;
@@ -302,12 +363,12 @@ class ZenGroups {
     event.preventDefault();
 
     if (this._hasActiveTabs(group)) {
-      group.toggleAttribute("has-focus");
       group.toggleAttribute("was-collapsed");
+      group.toggleAttribute("has-active");
       this._updateTabVisibility(group);
       if (
         !group.hasAttribute("was-collapsed") &&
-        !group.hasAttribute("has-focus")
+        !group.hasAttribute("has-active")
       ) {
         this.#animationState = "open";
       } else {
@@ -320,25 +381,28 @@ class ZenGroups {
     this._resetGroupState(group);
   }
 
-  #handleGlobalTabSelect(event) {
-    const selectedTab = event.target;
+  #onTabResetButtonClick(event) {
+    if (!event.target.classList.contains("tab-reset-button")) return;
+    const tab = event.target.closest(".tab-stack").parentElement;
+    if (tab?.pinned) return;
 
-    for (const group of this._groups()) {
-      if (!group.tabs.includes(selectedTab)) {
-        this._resetGroupState(group);
-      }
-    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const group = tab.group;
+    if (!group) return;
+
+    gBrowser.explicitUnloadTabs([tab]);
   }
 
-  #createFolderIcon(group) {
+  #setupFolderIcon(group) {
     const labelContainer = group.querySelector(".tab-group-label-container");
-    if (labelContainer.querySelector(".tab-group-icon")) return;
 
-    const iconContainer = document.createElement("div");
-    iconContainer.classList.add("tab-group-icon");
+    const iconContainer = labelContainer.querySelector(".tab-group-icon");
+    if (iconContainer.querySelector("svg")) return;
+
     const svgElem = this.folderSVG.cloneNode(true);
     iconContainer.appendChild(svgElem);
-    labelContainer.insertBefore(iconContainer, labelContainer.firstChild);
 
     svgElem
       .querySelectorAll("animate, animateTransform, animateMotion")
@@ -363,27 +427,21 @@ class ZenGroups {
     this.#handleGroupAnimation(group, this.#animationState, false);
   }
 
-  #createGroupButton(group) {
+  #setupGroupButton(group) {
     const labelContainer = group.querySelector(".tab-group-label-container");
-    if (labelContainer.querySelector(".tab-group-button")) {
-      return;
-    }
 
-    const button = document.createXULElement("toolbarbutton");
-    button.classList.add("toolbarbutton-1", "tab-group-button");
-    button.setAttribute("tooltiptext", "Group button");
-
+    const button = labelContainer.querySelector(".tab-group-action-button");
     button.addEventListener("click", this.activeGroupPopup.bind(this));
-
-    labelContainer.appendChild(button);
-
     this.#createGroupButtonPopup(group);
+
+    const tabsButton = labelContainer.querySelector(".tab-group-tabs-button");
+    tabsButton.addEventListener("click", this.activeGroupTabsPopup.bind(this));
   }
 
   activeGroupPopup(event) {
     event.stopPropagation();
     this.#activeGroup = event.currentTarget.parentElement.parentElement;
-    const popup = document.getElementById("tab-group-button-popup");
+    const popup = document.getElementById("tab-group-actions-popup");
     const target = event.target;
     target.setAttribute("open", "true");
     const handlePopupHidden = (event) => {
@@ -395,8 +453,113 @@ class ZenGroups {
     popup.openPopup(event.target, "after_start");
   }
 
+  activeGroupTabsPopup(event) {
+    event.stopPropagation();
+    this.#activeGroup = event.currentTarget.closest("tab-group");
+    const popup = document.getElementById("zen-group-tabs-popup");
+    this.#populateTabsList(this.#activeGroup, popup);
+
+    const target = event.currentTarget;
+    target.setAttribute("open", "true");
+
+    const handlePopupHidden = (e) => {
+      if (e.target !== popup) return;
+      target.removeAttribute("open");
+      popup.removeEventListener("popuphidden", handlePopupHidden);
+    };
+
+    popup.addEventListener("popuphidden", handlePopupHidden);
+    popup.openPopup(target, "after_start");
+  }
+
+  #createGroupTabsPopup() {
+    if (document.getElementById("zen-group-tabs-popup")) return;
+
+    const popup = this.tabsListPopup.cloneNode(true);
+    document.querySelector("#mainPopupSet").appendChild(popup);
+  }
+
+  #formatRelativeTime(timestamp) {
+    const now = Date.now();
+    const seconds = Math.floor((now - timestamp) / 1000);
+
+    if (seconds < 60) {
+      return "Just now";
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    }
+    const days = Math.floor(hours / 24);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  #populateTabsList(group, popup) {
+    const tabsList = popup.querySelector("#zen-group-tabs-list");
+    tabsList.replaceChildren();
+
+    for (const tab of group.tabs) {
+      if (tab.hidden) continue;
+
+      const item = document.createElement("div");
+      item.className = "tabs-list-item";
+
+      const background = document.createElement("div");
+      background.className = "tabs-list-item-background";
+
+      const content = document.createElement("div");
+      content.className = "tabs-list-item-content";
+
+      const icon = document.createElement("img");
+      icon.className = "tabs-list-item-icon";
+      let iconURL = gBrowser.getIcon(tab) || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3C/svg%3E";
+      if (iconURL) {
+        icon.src = iconURL;
+      }
+
+      const labelsContainer = document.createElement("div");
+      labelsContainer.className = "tabs-list-item-labels";
+
+      const mainLabel = document.createElement("div");
+      mainLabel.className = "tabs-list-item-label";
+      mainLabel.textContent = tab.label;
+
+      const secondaryLabel = document.createElement("div");
+      secondaryLabel.className = "tab-list-item-secondary-label";
+      secondaryLabel.textContent = this.#formatRelativeTime(tab.lastAccessed);
+
+      labelsContainer.append(mainLabel, secondaryLabel);
+      content.append(icon, labelsContainer);
+      item.append(background, content);
+
+      if (tab.selected) {
+        item.setAttribute("selected", "true");
+      }
+
+      item.setAttribute("data-label", tab.label.toLowerCase());
+
+      item.addEventListener("click", () => {
+        if (group.collapsed) {
+          this.#animationState = "close";
+          group.collapsed = false;
+          group.toggleAttribute("has-active");
+          group.toggleAttribute("was-collapsed");
+        }
+        gBrowser.selectedTab = tab;
+        popup.hidePopup();
+        this._updateTabVisibility(group);
+      });
+
+      tabsList.appendChild(item);
+    }
+  }
+
   #createGroupButtonPopup() {
-    if (document.getElementById("tab-group-button-popup")) return;
+    if (document.getElementById("tab-group-actions-popup")) return;
 
     const popup = this.menuPopup.cloneNode(true);
 
